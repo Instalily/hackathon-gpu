@@ -8,10 +8,63 @@ resource "google_service_account" "team" {
   depends_on = [google_project_service.apis]
 }
 
-resource "google_project_iam_member" "team_editor" {
+locals {
+  team_roles = [
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+  ]
+  reservation_name = "${var.reservation_prefix}-${replace(var.zone, "-", "")}"
+}
+
+resource "google_project_iam_member" "team_roles" {
+  for_each = toset(local.team_roles)
+
   project = var.project_id
-  role    = "roles/editor"
+  role    = each.value
   member  = "serviceAccount:${google_service_account.team.email}"
+}
+
+# --- Per-team GCS bucket ---
+
+resource "google_storage_bucket" "team_data" {
+  name                        = "${var.project_id}-${var.team_name}"
+  location                    = var.region
+  project                     = var.project_id
+  uniform_bucket_level_access = true
+  force_destroy               = true
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_storage_bucket_iam_member" "team_data_admin" {
+  bucket = google_storage_bucket.team_data.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.team.email}"
+}
+
+# --- Per-team firewall rule (isolates teams from each other) ---
+
+resource "google_compute_firewall" "team_internal" {
+  name    = "hackathon-internal-${var.team_name}"
+  network = data.google_compute_network.hackathon.self_link
+  project = var.project_id
+
+  allow {
+    protocol = "tcp"
+  }
+
+  allow {
+    protocol = "udp"
+  }
+
+  allow {
+    protocol = "icmp"
+  }
+
+  source_tags = [var.team_name]
+  target_tags = [var.team_name]
+
+  depends_on = [google_project_service.apis]
 }
 
 # --- Static external IP ---
@@ -54,14 +107,25 @@ resource "google_compute_instance" "team" {
     automatic_restart   = true
   }
 
+  reservation_affinity {
+    type = "SPECIFIC_RESERVATION"
+    specific_reservation {
+      key    = "compute.googleapis.com/reservation-name"
+      values = [local.reservation_name]
+    }
+  }
+
   service_account {
     email  = google_service_account.team.email
-    scopes = []
+    scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_write",
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring.write",
+    ]
   }
 
   metadata = {
     install-nvidia-driver = "True"
-    proxy-mode            = "project_editors"
     startup-script        = "iptables -A OUTPUT -d 169.254.169.254 -m owner ! --uid-owner root -j REJECT"
   }
 

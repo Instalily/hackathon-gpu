@@ -25,21 +25,23 @@ variable "billing_account" {
 }
 
 variable "region" {
-  description = "GCP region"
+  description = "GCP region (derived from zone by provision.sh)"
   type        = string
-  default     = "us-central1"
 }
 
 variable "zone" {
-  description = "GCP zone"
+  description = "GCP zone (passed by provision.sh from config.yaml)"
   type        = string
-  default     = "us-central1-b"
 }
 
 variable "machine_type" {
-  description = "Machine type for GPU VM"
+  description = "Machine type for GPU VM (passed by provision.sh from config.yaml)"
   type        = string
-  default     = "a2-highgpu-1g"
+}
+
+variable "reservation_prefix" {
+  description = "Reservation name prefix — must match reserve.sh / config.yaml"
+  type        = string
 }
 
 variable "budget_amount" {

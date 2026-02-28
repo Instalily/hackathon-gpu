@@ -22,3 +22,8 @@ output "jupyter_url" {
   description = "Jupyter notebook URL"
   value       = "http://${google_compute_address.team.address}:8080"
 }
+
+output "team_bucket" {
+  description = "GCS bucket for team data"
+  value       = "gs://${google_storage_bucket.team_data.name}"
+}
