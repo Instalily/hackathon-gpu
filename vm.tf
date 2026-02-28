@@ -56,12 +56,13 @@ resource "google_compute_instance" "team" {
 
   service_account {
     email  = google_service_account.team.email
-    scopes = ["cloud-platform"]
+    scopes = []
   }
 
   metadata = {
     install-nvidia-driver = "True"
     proxy-mode            = "project_editors"
+    startup-script        = "iptables -A OUTPUT -d 169.254.169.254 -m owner ! --uid-owner root -j REJECT"
   }
 
   tags = ["hackathon", var.team_name]
