@@ -1,10 +1,10 @@
 # InstaLILY SF Hackathon — GPU VM Provisioning
 
-Provision A100 80GB GPU VMs for up to 50 hackathon teams in one command. Each team gets a dedicated VM with PyTorch, CUDA, and Jupyter pre-installed.
+Provision A100 40GB GPU VMs for up to 50 hackathon teams in one command. Each team gets a dedicated VM with PyTorch, CUDA, and Jupyter pre-installed.
 
 ## What each team gets
 
-- **a2-ultragpu-1g** instance: 12 vCPUs, 170 GB RAM, 1x NVIDIA A100 80GB, 375 GB NVMe SSD
+- **a2-highgpu-1g** instance: 12 vCPUs, 85 GB RAM, 1x NVIDIA A100 40GB
 - Static external IP
 - Deep Learning VM image (PyTorch + CUDA pre-installed)
 - Jupyter notebook on port 8080
@@ -20,13 +20,10 @@ Provision A100 80GB GPU VMs for up to 50 hackathon teams in one command. Each te
 ## Quick start
 
 ```bash
-git clone <gist-url> hackathon-gpu && cd hackathon-gpu
+git clone https://github.com/Instalily/hackathon-gpu.git && cd hackathon-gpu
 chmod +x provision.sh
 
-# One-time setup (creates shared VPC, firewall, TF state bucket)
-./provision.sh setup
-
-# Provision a team
+# Setup is already done — just provision teams:
 ./provision.sh up team-alpha
 ```
 
