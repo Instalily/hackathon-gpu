@@ -33,6 +33,10 @@ resource "google_storage_bucket" "team_data" {
   uniform_bucket_level_access = true
   force_destroy               = true
 
+  versioning {
+    enabled = true
+  }
+
   depends_on = [google_project_service.apis]
 }
 

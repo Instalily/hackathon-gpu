@@ -71,6 +71,7 @@ for ZONE in "${ALL_ZONES[@]}"; do
         --zone="$ZONE" \
         --vm-count="$TRY_COUNT" \
         --machine-type="$MACHINE_TYPE" \
+        --accelerator=count=1,type="$ACCELERATOR_TYPE" \
         --require-specific-reservation \
         --quiet 2>&1)
 
