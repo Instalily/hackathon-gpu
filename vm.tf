@@ -93,7 +93,7 @@ resource "google_compute_instance" "team" {
     initialize_params {
       image = "projects/deeplearning-platform-release/global/images/family/pytorch-2-7-cu128-ubuntu-2204-nvidia-570"
       size  = 200
-      type  = "pd-ssd"
+      type  = "hyperdisk-balanced"
     }
   }
 
