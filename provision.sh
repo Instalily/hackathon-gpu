@@ -42,6 +42,7 @@ Commands:
   down <team-name> [zone]      Tear down a team's GPU VM
   list                         List all active team workspaces
   ssh <team-name>              SSH into a team's VM
+  password <team-name>         Set up SSH password auth (creates hackathon user with random password)
 
 Zones (from config.yaml):
   ${ALL_ZONES[*]}
@@ -50,6 +51,7 @@ Examples:
   $0 setup
   $0 up team-alpha
   $0 up team-alpha us-central1-c
+  $0 password team-alpha
   $0 ssh team-alpha
   $0 down team-alpha
   $0 list
@@ -233,6 +235,48 @@ cmd_ssh() {
   ssh -o StrictHostKeyChecking=no "${ip}"
 }
 
+cmd_password() {
+  local team_name="$1"
+  local vm_name="hackathon-vm-${team_name}"
+  local zone=""
+  local ip=""
+
+  # Find the VM across all configured zones
+  for z in "${ALL_ZONES[@]}"; do
+    ip=$(gcloud compute instances describe "${vm_name}" \
+      --zone="${z}" --project="${PROJECT_ID}" \
+      --format="get(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null) && { zone="${z}"; break; }
+  done
+
+  if [ -z "${zone}" ]; then
+    echo "ERROR: VM '${vm_name}' not found in any configured zone."
+    exit 1
+  fi
+
+  local password
+  password=$(openssl rand -hex 4)
+
+  echo "==> Setting up SSH password auth on ${vm_name} (${ip}, ${zone})..."
+
+  gcloud compute ssh "${vm_name}" --zone="${zone}" --project="${PROJECT_ID}" --command="
+sudo useradd -m -s /bin/bash hackathon 2>/dev/null || true
+echo 'hackathon:${password}' | sudo chpasswd
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
+sudo systemctl restart sshd
+"
+
+  echo ""
+  echo "============================================"
+  echo "  VM:       ${vm_name}"
+  echo "  IP:       ${ip}"
+  echo "  User:     hackathon"
+  echo "  Password: ${password}"
+  echo "  SSH:      ssh hackathon@${ip}"
+  echo "============================================"
+  echo ""
+}
+
 # --- Main ---
 
 if [ $# -lt 1 ]; then
@@ -269,6 +313,13 @@ case "${COMMAND}" in
       exit 1
     fi
     cmd_ssh "$1"
+    ;;
+  password)
+    if [ $# -ne 1 ]; then
+      echo "Usage: $0 password <team-name>"
+      exit 1
+    fi
+    cmd_password "$1"
     ;;
   *)
     echo "Unknown command: ${COMMAND}"

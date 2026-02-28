@@ -1,14 +1,16 @@
 # InstaLILY SF Hackathon — GPU VM Provisioning
 
-Provision A100 40GB GPU VMs for up to 50 hackathon teams in one command. Each team gets a dedicated VM with PyTorch, CUDA, and Jupyter pre-installed.
+Provision NVIDIA RTX Pro 6000 GPU VMs for up to 50 hackathon teams in one command. Each team gets a dedicated VM with PyTorch, CUDA, and Jupyter pre-installed.
 
 ## What each team gets
 
-- **a2-highgpu-1g** instance: 12 vCPUs, 85 GB RAM, 1x NVIDIA A100 40GB
+- **g4-standard-48** instance: 48 vCPUs, 192 GB RAM, 1x NVIDIA RTX Pro 6000 (96 GB VRAM)
 - Static external IP
-- Deep Learning VM image (PyTorch + CUDA pre-installed)
+- Deep Learning VM image (PyTorch 2.7 + CUDA 12.8 pre-installed)
 - Jupyter notebook on port 8080
-- $4,000 project-wide budget with auto-shutdown
+- Per-team GCS bucket for data
+- Per-team firewall isolation (teams cannot access each other's VMs)
+- SSH access via username/password
 
 ## Prerequisites
 
@@ -21,10 +23,11 @@ Provision A100 40GB GPU VMs for up to 50 hackathon teams in one command. Each te
 
 ```bash
 git clone https://github.com/Instalily/hackathon-gpu.git && cd hackathon-gpu
-chmod +x provision.sh
+chmod +x provision.sh reserve.sh
 
 # Setup is already done — just provision teams:
 ./provision.sh up team-alpha
+./provision.sh password team-alpha
 ```
 
 ## Commands
@@ -33,30 +36,42 @@ chmod +x provision.sh
 |---|---|
 | `./provision.sh setup` | One-time: creates shared VPC, firewall rules, GCS state bucket, runs `terraform init` |
 | `./provision.sh up <team>` | Provisions a GPU VM for `<team>`, prints IP and SSH command |
+| `./provision.sh password <team>` | Sets up SSH password auth (creates `hackathon` user with random password) |
 | `./provision.sh down <team>` | Tears down all resources for `<team>` and deletes the workspace |
 | `./provision.sh list` | Lists all active team workspaces |
-| `./provision.sh ssh <team>` | SSH into a team's VM |
+| `./provision.sh ssh <team>` | SSH into a team's VM (via gcloud, for operators) |
 
-## What happens on `provision.sh up`
+## Typical workflow
 
-1. Creates (or selects) a Terraform workspace named `<team>`
-2. Creates a service account with `roles/editor`
-3. Reserves a static external IP
-4. Provisions an `a2-ultragpu-1g` VM with the Deep Learning VM image
-5. Sets up a billing budget ($4k) with email alerts at $500 / $1k / $2k / $3k / $4k
-6. Deploys a Cloud Function that auto-stops all VMs if budget is exceeded
-7. Prints the IP, SSH command, and Jupyter URL
+```bash
+# 1. Provision the VM
+./provision.sh up team-alpha
+
+# 2. Set up SSH password for the team
+./provision.sh password team-alpha
+# Output:
+#   VM:       hackathon-vm-team-alpha
+#   IP:       34.x.x.x
+#   User:     hackathon
+#   Password: a1b2c3d4
+#   SSH:      ssh hackathon@34.x.x.x
+
+# 3. Give the team their credentials — they SSH in with:
+ssh hackathon@34.x.x.x
+# (enter password when prompted)
+```
 
 ## SSH access
 
+Teams SSH in with the username/password from `./provision.sh password`:
+
 ```bash
-# Via provision.sh
-./provision.sh ssh team-alpha
+ssh hackathon@<ip>
+# Enter the password when prompted
+```
 
-# Direct SSH
-ssh <ip>
-
-# Via gcloud
+Operators can also use gcloud:
+```bash
 gcloud compute ssh hackathon-vm-team-alpha --zone=us-central1-b --project=internal-sf-hackathon
 ```
 
@@ -72,40 +87,52 @@ The Deep Learning VM image starts Jupyter automatically.
 
 ## Budget & alerts
 
-- **Budget**: $4,000 per project (shared across all teams)
-- **Email alerts**: Sent to sai@instalily.ai and viraj@instalily.ai at $500, $1k, $2k, $3k, $4k
+- **Budget**: $6,000 per project (shared across all teams)
+- **Email alerts**: Sent to sai@instalily.ai and viraj@instalily.ai at $500, $1k, $2k, $4k, $6k
 - **Auto-shutdown**: A Cloud Function monitors the Pub/Sub topic and stops all running VMs when spend reaches the budget
-- **Expected cost**: ~$1.36/hr per VM. 50 teams × 8 hours ≈ $544 total
+
+## Security
+
+- Service accounts have minimal IAM roles (logging + monitoring only)
+- Metadata server is blocked via iptables (prevents `gcloud` commands from inside VMs)
+- Per-team firewall rules isolate teams from each other on the network
+- Teams can only access their own VM via SSH
+
+## GPU reservations
+
+Reservations are managed separately via `reserve.sh`:
+
+```bash
+# Create reservations across all configured zones
+./reserve.sh
+
+# List existing reservations
+gcloud compute reservations list --project=internal-sf-hackathon --filter='name~hackathon-rtxpro'
+```
 
 ## Troubleshooting
 
 ### GPU quota error
 ```
-Quota 'NVIDIA_A100_80GB' exceeded
+Quota 'NVIDIA_RTX_PRO_6000' exceeded
 ```
-Verify quota: `gcloud compute regions describe us-central1 --project=internal-sf-hackathon | grep -A5 A100`
+Verify quota: `gcloud compute regions describe us-central1 --project=internal-sf-hackathon`
 
-### Image not found
+### Reservation not found
+Ensure the reservation exists for the target zone:
+```bash
+gcloud compute reservations list --project=internal-sf-hackathon --filter='name~hackathon-rtxpro'
 ```
-The resource 'projects/deeplearning-platform-release/global/images/family/pytorch-latest-gpu' was not found
-```
-List available images: `gcloud compute images list --project=deeplearning-platform-release --filter="family:pytorch" --no-standard-images`
 
 ### Static IP quota
 Default is ~8 per region. Request an increase:
-```
+```bash
 gcloud compute project-info describe --project=internal-sf-hackathon | grep -A2 EXTERNAL
-```
-
-### Cloud Function deployment fails
-Ensure these APIs are enabled:
-```
-gcloud services enable cloudfunctions.googleapis.com cloudbuild.googleapis.com run.googleapis.com eventarc.googleapis.com --project=internal-sf-hackathon
 ```
 
 ### Terraform state lock
 If a previous run was interrupted:
-```
+```bash
 tofu force-unlock <lock-id>
 ```
 
@@ -118,13 +145,3 @@ gcloud projects delete internal-sf-hackathon
 ```
 
 This destroys all VMs, IPs, buckets, and billing configuration in one shot.
-
-## Cost estimate
-
-| Item | Cost |
-|---|---|
-| a2-ultragpu-1g (on-demand) | ~$1.36/hr |
-| 1 team × 8 hours | ~$10.88 |
-| 50 teams × 8 hours | ~$544 |
-| Static IP (while attached) | Free |
-| Cloud Function | Negligible |
