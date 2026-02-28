@@ -102,6 +102,11 @@ resource "google_compute_instance" "team" {
     }
   }
 
+  guest_accelerator {
+    type  = "nvidia-rtx-pro-6000"
+    count = 1
+  }
+
   scheduling {
     on_host_maintenance = "TERMINATE"
     automatic_restart   = true
