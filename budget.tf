@@ -42,31 +42,31 @@ resource "google_billing_budget" "team" {
     }
   }
 
-  # $500 threshold (12.5%)
+  # $500 threshold
   threshold_rules {
-    threshold_percent = 0.125
+    threshold_percent = 0.083
     spend_basis       = "CURRENT_SPEND"
   }
 
-  # $1,000 threshold (25%)
+  # $1,000 threshold
   threshold_rules {
-    threshold_percent = 0.25
+    threshold_percent = 0.167
     spend_basis       = "CURRENT_SPEND"
   }
 
-  # $2,000 threshold (50%)
+  # $2,000 threshold
   threshold_rules {
-    threshold_percent = 0.5
+    threshold_percent = 0.333
     spend_basis       = "CURRENT_SPEND"
   }
 
-  # $3,000 threshold (75%)
+  # $4,000 threshold
   threshold_rules {
-    threshold_percent = 0.75
+    threshold_percent = 0.667
     spend_basis       = "CURRENT_SPEND"
   }
 
-  # $4,000 threshold (100%)
+  # $6,000 threshold (100%)
   threshold_rules {
     threshold_percent = 1.0
     spend_basis       = "CURRENT_SPEND"

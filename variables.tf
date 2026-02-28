@@ -45,7 +45,7 @@ variable "machine_type" {
 variable "budget_amount" {
   description = "Budget amount in USD"
   type        = number
-  default     = 4000
+  default     = 6000
 }
 
 variable "alert_emails" {
