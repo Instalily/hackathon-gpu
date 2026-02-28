@@ -1,32 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ID="internal-sf-hackathon"
-REGION="us-central1"
-ZONE="us-central1-b"
-NETWORK="hackathon-vpc"
-SUBNET="hackathon-subnet"
-STATE_BUCKET="hackathon-gpu-tf-state"
-STATE_PROJECT="infra-050524"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG="${SCRIPT_DIR}/config.yaml"
 
-# Use tofu if available, otherwise terraform
+yaml_get() {
+  grep "^${1}:" "$CONFIG" | head -1 | sed 's/^[^:]*:[[:space:]]*//'
+}
+
+PROJECT_ID="$(yaml_get project)"
+NETWORK="$(yaml_get network)"
+SUBNET="$(yaml_get subnet)"
+STATE_BUCKET="$(yaml_get state_bucket)"
+STATE_PROJECT="$(yaml_get state_project)"
+MACHINE_TYPE="$(yaml_get machine_type)"
+RESERVATION_PREFIX="$(yaml_get reservation_prefix)"
+read -ra ALL_ZONES <<< "$(yaml_get zones)"
+DEFAULT_ZONE="${ALL_ZONES[0]}"
+DEFAULT_REGION="${DEFAULT_ZONE%-*}"
+
 TF=$(command -v tofu 2>/dev/null || command -v terraform 2>/dev/null || { echo "ERROR: Neither tofu nor terraform found in PATH"; exit 1; })
+
+tf_vars() {
+  local team_name="$1"
+  local zone="$2"
+  local region="${zone%-*}"
+  echo "-var=team_name=${team_name}" \
+       "-var=zone=${zone}" \
+       "-var=region=${region}" \
+       "-var=machine_type=${MACHINE_TYPE}" \
+       "-var=reservation_prefix=${RESERVATION_PREFIX}"
+}
 
 usage() {
   cat <<EOF
 Usage: $0 <command> [args]
 
 Commands:
-  setup             One-time setup: creates shared VPC, firewall rules, and TF state bucket
-  up <team-name>    Provision a GPU VM for a team
-  down <team-name>  Tear down a team's GPU VM
-  list              List all active team workspaces
-  ssh <team-name>   SSH into a team's VM
+  setup                        One-time setup: creates shared VPC, firewall rules, and TF state bucket
+  up <team-name> [zone]        Provision a GPU VM for a team (zone defaults to ${DEFAULT_ZONE})
+  down <team-name> [zone]      Tear down a team's GPU VM
+  list                         List all active team workspaces
+  ssh <team-name>              SSH into a team's VM
+
+Zones (from config.yaml):
+  ${ALL_ZONES[*]}
 
 Examples:
   $0 setup
   $0 up team-alpha
+  $0 up team-alpha us-central1-c
   $0 ssh team-alpha
   $0 down team-alpha
   $0 list
@@ -42,7 +65,7 @@ cmd_setup() {
   if gsutil ls -b "gs://${STATE_BUCKET}" &>/dev/null; then
     echo "    Bucket already exists, skipping."
   else
-    gsutil mb -p "${STATE_PROJECT}" -l "${REGION}" "gs://${STATE_BUCKET}"
+    gsutil mb -p "${STATE_PROJECT}" -l "${DEFAULT_REGION}" "gs://${STATE_BUCKET}"
     gsutil versioning set on "gs://${STATE_BUCKET}"
   fi
 
@@ -56,30 +79,43 @@ cmd_setup() {
       --subnet-mode=custom
   fi
 
-  # Create subnet
-  echo "==> Creating subnet: ${SUBNET}"
-  if gcloud compute networks subnets describe "${SUBNET}" --region="${REGION}" --project="${PROJECT_ID}" &>/dev/null; then
-    echo "    Subnet already exists, skipping."
-  else
-    gcloud compute networks subnets create "${SUBNET}" \
-      --project="${PROJECT_ID}" \
-      --network="${NETWORK}" \
-      --region="${REGION}" \
-      --range="10.0.0.0/16"
-  fi
+  # Create one subnet per region used by the configured zones
+  local regions=()
+  for z in "${ALL_ZONES[@]}"; do
+    regions+=("${z%-*}")
+  done
+  # Deduplicate
+  readarray -t regions < <(printf '%s\n' "${regions[@]}" | sort -u)
+
+  local idx=0
+  for region in "${regions[@]}"; do
+    local cidr="10.${idx}.0.0/16"
+    local subnet_name="${SUBNET}"
+    if [ "${#regions[@]}" -gt 1 ]; then
+      subnet_name="${SUBNET}-${region}"
+    fi
+
+    echo "==> Creating subnet: ${subnet_name} (${region}, ${cidr})"
+    if gcloud compute networks subnets describe "${subnet_name}" --region="${region}" --project="${PROJECT_ID}" &>/dev/null; then
+      echo "    Subnet already exists, skipping."
+    else
+      gcloud compute networks subnets create "${subnet_name}" \
+        --project="${PROJECT_ID}" \
+        --network="${NETWORK}" \
+        --region="${region}" \
+        --range="${cidr}"
+    fi
+    idx=$((idx + 1))
+  done
 
   # Create firewall rules
   echo "==> Creating firewall rules..."
 
-  # Allow all internal traffic
+  # Remove legacy blanket internal rule if it exists
   if gcloud compute firewall-rules describe hackathon-allow-internal --project="${PROJECT_ID}" &>/dev/null; then
-    echo "    hackathon-allow-internal already exists, skipping."
-  else
-    gcloud compute firewall-rules create hackathon-allow-internal \
-      --project="${PROJECT_ID}" \
-      --network="${NETWORK}" \
-      --allow=tcp,udp,icmp \
-      --source-ranges="10.0.0.0/16"
+    echo "==> Removing legacy allow-all-internal rule (replaced by per-team rules)..."
+    gcloud compute firewall-rules delete hackathon-allow-internal \
+      --project="${PROJECT_ID}" --quiet
   fi
 
   # Allow SSH from anywhere
@@ -113,13 +149,15 @@ cmd_setup() {
 
   echo ""
   echo "==> Setup complete! Shared infrastructure is ready."
-  echo "    Run '$0 up <team-name>' to provision a team VM."
+  echo "    Run '$0 up <team-name> [zone]' to provision a team VM."
 }
 
 cmd_up() {
   local team_name="$1"
+  local zone="${2:-${DEFAULT_ZONE}}"
+  local region="${zone%-*}"
 
-  echo "==> Provisioning GPU VM for team: ${team_name}"
+  echo "==> Provisioning GPU VM for team: ${team_name} (zone: ${zone})"
 
   cd "${SCRIPT_DIR}"
 
@@ -133,21 +171,24 @@ cmd_up() {
   fi
 
   # Apply
-  ${TF} apply -var="team_name=${team_name}" -auto-approve
+  ${TF} apply $(tf_vars "${team_name}" "${zone}") -auto-approve
 
   # Show outputs
   echo ""
   echo "============================================"
-  echo "  Team: ${team_name}"
-  echo "  IP:   $(${TF} output -raw external_ip)"
-  echo "  SSH:  $(${TF} output -raw ssh_command)"
+  echo "  Team:    ${team_name}"
+  echo "  Zone:    ${zone}"
+  echo "  IP:      $(${TF} output -raw external_ip)"
+  echo "  SSH:     $(${TF} output -raw ssh_command)"
   echo "  Jupyter: $(${TF} output -raw jupyter_url)"
+  echo "  Bucket:  $(${TF} output -raw team_bucket)"
   echo "============================================"
   echo ""
 }
 
 cmd_down() {
   local team_name="$1"
+  local zone="${2:-${DEFAULT_ZONE}}"
 
   echo "==> Tearing down team: ${team_name}"
 
@@ -159,7 +200,7 @@ cmd_down() {
   fi
 
   ${TF} workspace select "${team_name}"
-  ${TF} destroy -var="team_name=${team_name}" -auto-approve
+  ${TF} destroy $(tf_vars "${team_name}" "${zone}") -auto-approve
 
   # Switch back to default and delete the workspace
   ${TF} workspace select default
@@ -206,18 +247,18 @@ case "${COMMAND}" in
     cmd_setup
     ;;
   up)
-    if [ $# -ne 1 ]; then
-      echo "Usage: $0 up <team-name>"
+    if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+      echo "Usage: $0 up <team-name> [zone]"
       exit 1
     fi
-    cmd_up "$1"
+    cmd_up "$@"
     ;;
   down)
-    if [ $# -ne 1 ]; then
-      echo "Usage: $0 down <team-name>"
+    if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+      echo "Usage: $0 down <team-name> [zone]"
       exit 1
     fi
-    cmd_down "$1"
+    cmd_down "$@"
     ;;
   list)
     cmd_list
